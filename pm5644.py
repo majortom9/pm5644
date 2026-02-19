@@ -10,7 +10,7 @@ def grid_cols():
 
 def grid_rows():
     return [border_h + i * unit_h for i in range(14)]
-    
+
 # ── MODULE-LEVEL CONSTANTS ────────────────────────────────────────────────────
 W, H         = 1920, 1080
 SQ           = 80          # Grid square size (px)
@@ -40,75 +40,91 @@ BY_NEG = ( 31, 146, 127)   # 270° (−B−Y, −U)
 GY_POS = ( 48, 115, 180)   # 146° (+G−Y)
 GY_NEG = (206, 139,  74)   # 326° (−G−Y)
 
-# ── WHEEL ASSET — loaded once at startup ─────────────────────────────────────
-_SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-_ASSET_PATH  = os.path.join(_SCRIPT_DIR, 'wheel_asset_clean.png')
-_WHEEL_BASE  = cv2.imread(_ASSET_PATH, cv2.IMREAD_UNCHANGED)   # 496×496 RGBA
+def _generate_advanced_wheel(rot):
+    # 1. Canvas and Canvas-based Radius
+    circle_radius = (int(SQ * 2.8) - 4) // 2
+    padding = 12
+    canvas_size = (circle_radius + padding) * 2
+    radius = circle_radius
 
-_WHEEL_RADIUS = int(SQ * 1.4)   # 112 px at SQ=80
+    wheel = np.zeros((canvas_size, canvas_size, 4), dtype=np.uint8)
+    center = (canvas_size // 2, canvas_size // 2)
 
-def _make_wheel(target_radius, cw_deg):
-    """Rotate and scale the base wheel asset to the target radius."""
-    sz  = _WHEEL_BASE.shape[0]
-    M   = cv2.getRotationMatrix2D((sz//2, sz//2), -cw_deg, 1.0)
-    rot = cv2.warpAffine(_WHEEL_BASE, M, (sz, sz),
-                         flags=cv2.INTER_LINEAR,
-                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-    d = target_radius * 2
-    return cv2.resize(rot, (d, d), interpolation=cv2.INTER_AREA)
+    # ─── GEOMETRY CONFIGURATION ───
+    border_thickness = 12
+    hub_inner_r = 18
+    hub_outer_r = 26
+    spoke_overlap = 1  # How many px the spokes penetrate the outer border
+    # ──────────────────────────────
 
-# Pre-compute all four rotations once — they never change
-_WHEEL_PATCHES = {rot: _make_wheel(_WHEEL_RADIUS, rot) for rot in [0, 90, 180, 270]}
+    # 1. Outer Rings
+    cv2.circle(wheel, center, radius, (255, 255, 255, 255), -1, cv2.LINE_AA)
+    cv2.circle(wheel, center, radius - border_thickness, (0, 0, 0, 255), -1, cv2.LINE_AA)
+
+    # 2. Concentric Hub Rings (Using the new variables)
+    cv2.circle(wheel, center, hub_inner_r, (255, 255, 255, 255), 2, cv2.LINE_AA)
+    cv2.circle(wheel, center, hub_outer_r, (255, 255, 255, 255), 2, cv2.LINE_AA)
+
+    # 3. Spoke Pattern
+    # Spokes start at the outer hub ring and end just inside the white border
+    spoke_start_r = hub_outer_r
+    spoke_end_r = radius - (border_thickness - spoke_overlap)
+
+    offsets = [-13.5, -9.0, -4.5, 0, 4.5, 9.0, 13.5]
+
+    for base_angle in [0, 90, 180, 270]:
+        for offset in offsets:
+            ang = np.deg2rad(base_angle + offset - rot)
+            x1 = int(center[0] + spoke_start_r * np.cos(ang))
+            y1 = int(center[1] - spoke_start_r * np.sin(ang))
+            x2 = int(center[0] + spoke_end_r * np.cos(ang))
+            y2 = int(center[1] - spoke_end_r * np.sin(ang))
+            cv2.line(wheel, (x1, y1), (x2, y2), (255, 255, 255, 255), 2, cv2.LINE_AA)
+
+    # 4. Labels and Arcs
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.7
+    font_thick = 2
+    label_r = radius * 0.62
+
+    ang20 = 135 - rot
+    ang35 = 315 - rot
+
+    for label, target_ang in [("20", ang20), ("35", ang35)]:
+        gap = 15.0
+        span = 31.5
+
+        s1, e1 = -(target_ang + span), -(target_ang + gap)
+        cv2.ellipse(wheel, center, (int(label_r), int(label_r)), 0, s1, e1, (255, 255, 255, 255), 3, cv2.LINE_AA)
+
+        s2, e2 = -(target_ang - gap), -(target_ang - span)
+        cv2.ellipse(wheel, center, (int(label_r), int(label_r)), 0, s2, e2, (255, 255, 255, 255), 3, cv2.LINE_AA)
+
+        (tw, th), _ = cv2.getTextSize(label, font, font_scale, font_thick)
+        rad = np.deg2rad(target_ang)
+        tx = int(center[0] + label_r * np.cos(rad) - tw / 2)
+        ty = int(center[1] - label_r * np.sin(rad) + th / 2)
+
+        cv2.putText(wheel, label, (tx, ty), font, font_scale, (255, 255, 255, 255), font_thick, cv2.LINE_AA)
+
+    return wheel
+
+# Pre-compute the four orientations
+_WHEEL_PATCHES = {r: _generate_advanced_wheel(r) for r in [0, 90, 180, 270]}
 
 def _stamp_wheel(img, cx, cy, patch):
-    """Alpha-blend an RGBA wheel patch onto a BGR image."""
+    """Blends the RGBA wheel patch onto the BGR image using alpha channel."""
     R = patch.shape[0] // 2
     x0, y0 = cx - R, cy - R
-    ix0 = max(0, x0);          iy0 = max(0, y0)
+    # Calculate bounds for clipping at image edges
+    ix0, iy0 = max(0, x0), max(0, y0)
     ix1 = min(img.shape[1], x0 + patch.shape[1])
     iy1 = min(img.shape[0], y0 + patch.shape[0])
-    px0, py0 = ix0 - x0, iy0 - y0
 
-    roi  = patch[py0:py0+(iy1-iy0), px0:px0+(ix1-ix0)]
-    dest = img[iy0:iy1, ix0:ix1]
-
-    if roi.shape[2] == 4:   # RGBA — respect alpha channel
-        alpha  = roi[:, :, 3:4] / 255.0
-        dest[:] = dest * (1 - alpha) + roi[:, :, :3] * alpha
-    else:
-        dest[:] = roi
-
-# Font scale for wheel labels (~16 px tall) — computed once
-_LBL_FONT  = cv2.FONT_HERSHEY_SIMPLEX
-_LBL_FS    = 0.45
-(_, _lbl_th), _ = cv2.getTextSize("20", _LBL_FONT, _LBL_FS, 1)
-_LBL_FS   *= 16.0 / _lbl_th    # scale to exactly 16 px height
-_LBL_FT    = 2                  # font thickness
-
-def _draw_wheel_labels(img, cx, cy, radius, ang_20, ang_35, wheel_rotation):
-    """Draw horizontal '20' / '35' labels at their respective arc positions.
-
-    '20' is placed at 75 % radius (outer white arc).
-    '35' is placed at 35 % radius (inner white arc) with a small tangential
-    offset so it sits cleanly between the hub rings and the inner spoke ends.
-    The offset direction is flipped for the 90°/270° rotated wheels because
-    their arc geometry mirrors the 0°/180° case.
-    """
-    for text, ang, r_frac in [("20", ang_20, 0.75), ("35", ang_35, 0.35)]:
-        lx = int(cx + radius * r_frac * np.cos(ang))
-        ly = int(cy - radius * r_frac * np.sin(ang))
-
-        if text == "35":
-            rot_rad     = np.deg2rad(wheel_rotation)
-            offset_dist = 15 if wheel_rotation not in [90, 270] else -15
-            lx += int(offset_dist * np.cos(rot_rad))
-            ly -= int(offset_dist * np.sin(rot_rad))   # y-axis is inverted
-
-        (tw, th), _ = cv2.getTextSize(text, _LBL_FONT, _LBL_FS, _LBL_FT)
-        pos = (lx - tw // 2, ly + th // 2)
-        cv2.putText(img, text, pos, _LBL_FONT, _LBL_FS, (0,0,0),   _LBL_FT+2, cv2.LINE_AA)
-        cv2.putText(img, text, pos, _LBL_FONT, _LBL_FS, (255,255,255), _LBL_FT, cv2.LINE_AA)
-
+    # ROI and Alpha blending
+    roi = patch[iy0-y0:iy1-y0, ix0-x0:ix1-x0]
+    alpha = roi[:, :, 3:4] / 255.0
+    img[iy0:iy1, ix0:ix1] = img[iy0:iy1, ix0:ix1] * (1 - alpha) + roi[:, :, :3] * alpha
 
 # ── SINE-WAVE GENERATOR (multiburst bands) ───────────────────────────────────
 def get_sine_wave(w, h, mhz, band_w, ref_mhz=0.8, ref_cycles=5):
@@ -140,7 +156,6 @@ def _generate_tvl_diagonal(width, height, tvl, flip=False):
     u  = ((width - 1 - xi) + yi) if flip else (xi + yi)
     bw = (np.sin(omega * u) < 0).astype(np.uint8) * 255
     return cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
-
 
 # ── SECTION DRAW FUNCTIONS ───────────────────────────────────────────────────
 
@@ -207,7 +222,6 @@ def _draw_circle_content(r, c, center, radius, offset, standard="PAL"):
         if i == 2: x2_lo = c[11] + 2
         if i == 3: x1_lo = c[12] + 2
         cv2.rectangle(cl, (x1_lo, r[5]), (x2_lo, r[6]), col, -1)
-
 
     # --- 6. MULTIBURST (Row 8-9) ---
     # Fill entire row black first, then draw sine bands on top
@@ -330,26 +344,22 @@ def _draw_pillars(final, r, c):
     cv2.rectangle(final, (c[17]+g, r[10]+g), (c[18],   r[12]-g), GY_POS, -1)
 
 
-def _draw_corner_wheels(final, r, c):
-    """Section 6: Stamp the four resolution wedge wheels with labels.
-
-    The base asset (wheel_asset_clean.png) is pre-loaded and rotated at
-    module level. Labels are drawn in code so they remain horizontal.
-
-    Rotation mapping (asset has '20' upper-left, '35' lower-right):
-      UL →   0°   (20@UL, 35@LR)
-      UR →  90°CW (20@UR, 35@LL)
-      LL → 270°CW (20@LL, 35@UR)
-      LR → 180°   (20@LR, 35@UL)
+def _draw_corner_wheels(img, r, c):
     """
-    for px, py, rot, a20, a35 in [
-        (c[2],  r[2],    0, np.deg2rad(135), np.deg2rad(305)),   # UL
-        (c[21], r[2],   90, np.deg2rad( 45), np.deg2rad(215)),   # UR
-        (c[2],  r[11], 270, np.deg2rad(225), np.deg2rad( 35)),   # LL
-        (c[21], r[11], 180, np.deg2rad(315), np.deg2rad(125)),   # LR
-    ]:
-        _stamp_wheel(final, px, py, _WHEEL_PATCHES[rot])
-        _draw_wheel_labels(final, px, py, _WHEEL_RADIUS, a20, a35, rot)
+    Draws the four resolution wheels at specified intersections.
+    Intersections chosen to center at approx (200, 180) for the top-left.
+    """
+    # Top-Left: Wedges/Labels at 0°
+    _stamp_wheel(img, c[2], r[2], _WHEEL_PATCHES[0])
+
+    # Top-Right: Everything rotated 90° CW
+    _stamp_wheel(img, c[22], r[2], _WHEEL_PATCHES[90])
+
+    # Bottom-Right: Everything rotated 180° CW
+    _stamp_wheel(img, c[22], r[12], _WHEEL_PATCHES[180])
+
+    # Bottom-Left: Everything rotated 270° CW
+    _stamp_wheel(img, c[2], r[12], _WHEEL_PATCHES[270])
 
 
 def _draw_overscan_marks(final):
