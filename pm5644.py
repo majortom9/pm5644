@@ -40,8 +40,57 @@ BY_NEG = ( 31, 146, 127)   # 270° (−B−Y, −U)
 GY_POS = ( 48, 115, 180)   # 146° (+G−Y)
 GY_NEG = (206, 139,  74)   # 326° (−G−Y)
 
+def _draw_axis_aligned_tvl_wedge(img, center,
+                                 r_inner, r_outer,
+                                 axis_angle_deg,
+                                 wedge_span_deg,
+                                 tvl_min, tvl_max,
+                                 picture_height_px,
+                                 rot):
+
+    # Axis corrected for rotation
+    axis = axis_angle_deg - rot
+    half_span = wedge_span_deg / 2.0
+
+    ang_start = np.deg2rad(axis - half_span)
+    ang_end   = np.deg2rad(axis + half_span)
+
+    for r in range(r_inner, r_outer):
+
+        # Linear TVL ramp
+        t = (r - r_inner) / float(r_outer - r_inner)
+        tvl = tvl_min + t * (tvl_max - tvl_min)
+
+        px_per_line = picture_height_px / tvl
+
+        # arc length = r * angle
+        ang_per_line = px_per_line / r
+
+        a = ang_start
+        toggle = 0
+
+        while a < ang_end:
+            a2 = min(a + ang_per_line, ang_end)
+
+            if toggle:
+                cv2.ellipse(
+                    img,
+                    center,
+                    (r, r),
+                    0,
+                    np.rad2deg(a),
+                    np.rad2deg(a2),
+                    (255,255,255,255),
+                    1,
+                    cv2.LINE_AA
+                )
+
+            toggle ^= 1
+            a = a2
+
 def _generate_advanced_wheel(rot):
-    # 1. Canvas and Canvas-based Radius
+    # ─── 1. CANVAS AND DIMENSIONS ───
+    # Circle diameter is derived from the global SQ (grid size)
     circle_radius = (int(SQ * 2.8) - 4) // 2
     padding = 12
     canvas_size = (circle_radius + padding) * 2
@@ -50,61 +99,77 @@ def _generate_advanced_wheel(rot):
     wheel = np.zeros((canvas_size, canvas_size, 4), dtype=np.uint8)
     center = (canvas_size // 2, canvas_size // 2)
 
-    # ─── GEOMETRY CONFIGURATION ───
+    # ─── 2. HUB & GEOMETRY CONFIGURATION ───
     border_thickness = 12
-    hub_inner_r = 18
-    hub_outer_r = 26
-    spoke_overlap = 1  # How many px the spokes penetrate the outer border
-    # ──────────────────────────────
+    hub_innermost_r = 12
+    hub_inner_r = 20
+    hub_outer_r = 28 # Threshold marker for 300 TVL start
+    spoke_overlap = 1
+    axis_thickness = 2
 
-    # 1. Outer Rings
+    # ─── 3. DRAW STRUCTURAL RINGS (Corner Geometry Gauges) ───
+    # Draw white outer border and black interior
     cv2.circle(wheel, center, radius, (255, 255, 255, 255), -1, cv2.LINE_AA)
     cv2.circle(wheel, center, radius - border_thickness, (0, 0, 0, 255), -1, cv2.LINE_AA)
-
-    # 2. Concentric Hub Rings (Using the new variables)
+    # Draw concentric hub rings (used for linearity and focus checks)
+    cv2.circle(wheel, center, hub_innermost_r, (255, 255, 255, 255), 2, cv2.LINE_AA)
     cv2.circle(wheel, center, hub_inner_r, (255, 255, 255, 255), 2, cv2.LINE_AA)
     cv2.circle(wheel, center, hub_outer_r, (255, 255, 255, 255), 2, cv2.LINE_AA)
 
-    # 3. Spoke Pattern
-    # Spokes start at the outer hub ring and end just inside the white border
+    # ─── 4. 300 TVL DEFINITION LINES (Axis Graticules) ───
     spoke_start_r = hub_outer_r
     spoke_end_r = radius - (border_thickness - spoke_overlap)
+    total_space = spoke_end_r - spoke_start_r
 
-    offsets = [-13.5, -9.0, -4.5, 0, 4.5, 9.0, 13.5]
+    # Segment ratios ensure labels align with the 300 TVL 'def' line markers
+    seg1_len = int(total_space * 0.35)
+    gap1_len = int(total_space * 0.12)
+    seg2_len = int(total_space * 0.25)
+    gap2_len = int(total_space * 0.12)
+    seg3_len = total_space - (seg1_len + gap1_len + seg2_len + gap2_len)
 
-    for base_angle in [0, 90, 180, 270]:
-        for offset in offsets:
-            ang = np.deg2rad(base_angle + offset - rot)
-            x1 = int(center[0] + spoke_start_r * np.cos(ang))
-            y1 = int(center[1] - spoke_start_r * np.sin(ang))
-            x2 = int(center[0] + spoke_end_r * np.cos(ang))
-            y2 = int(center[1] - spoke_end_r * np.sin(ang))
-            cv2.line(wheel, (x1, y1), (x2, y2), (255, 255, 255, 255), 2, cv2.LINE_AA)
+    # --- AXIS GRATICULE DRAWING (Temporarily Disabled) ---
+    # for axis_angle in [0, 90]:
+    #     ... (loop code) ...
 
-    # 4. Labels and Arcs
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.7
-    font_thick = 2
-    label_r = radius * 0.62
+    # ─── 5. FIXED-FREQUENCY RESOLUTION WEDGES ───
+    # Defined by PM5644 specs for corner definition
+    _WEDGE_CONFIG = {
+        0:   {"v_hi": 90,  "v_lo": 270, "h_hi": 0,   "h_lo": 180}, # UL
+        90:  {"v_hi": 90,  "v_lo": 270, "h_hi": 180, "h_lo": 0},   # UR
+        180: {"v_hi": 270, "v_lo": 90,  "h_hi": 180, "h_lo": 0},   # LR
+        270: {"v_hi": 270, "v_lo": 90,  "h_hi": 0,   "h_lo": 180}, # LL
+    }
+    cfg = _WEDGE_CONFIG[rot]
 
-    ang20 = 135 - rot
-    ang35 = 315 - rot
+    # Draw vertical (V) and horizontal (H) frequency packets
+    _draw_axis_aligned_tvl_wedge(wheel, center, spoke_start_r, spoke_end_r, axis_angle_deg=cfg["v_hi"], wedge_span_deg=30, tvl_min=400, tvl_max=400, picture_height_px=H, rot=0)
+    _draw_axis_aligned_tvl_wedge(wheel, center, spoke_start_r, spoke_end_r, axis_angle_deg=cfg["v_lo"], wedge_span_deg=30, tvl_min=250, tvl_max=250, picture_height_px=H, rot=0)
+    _draw_axis_aligned_tvl_wedge(wheel, center, spoke_start_r, spoke_end_r, axis_angle_deg=cfg["h_hi"], wedge_span_deg=30, tvl_min=300, tvl_max=300, picture_height_px=H, rot=0)
+    _draw_axis_aligned_tvl_wedge(wheel, center, spoke_start_r, spoke_end_r, axis_angle_deg=cfg["h_lo"], wedge_span_deg=30, tvl_min=150, tvl_max=150, picture_height_px=H, rot=0)
 
-    for label, target_ang in [("20", ang20), ("35", ang35)]:
-        gap = 15.0
-        span = 31.5
+    # ─── 6. DIMENSION ARCS AND TVL LABELS ───
+    font, font_scale, font_thick = cv2.FONT_HERSHEY_SIMPLEX, 0.53, 2
 
-        s1, e1 = -(target_ang + span), -(target_ang + gap)
-        cv2.ellipse(wheel, center, (int(label_r), int(label_r)), 0, s1, e1, (255, 255, 255, 255), 3, cv2.LINE_AA)
+    # Snap arc radii to the definition line boundaries
+    r20 = spoke_end_r - seg3_len  # Outer definition ring
+    r35 = spoke_start_r + seg1_len # Inner definition ring
 
-        s2, e2 = -(target_ang - gap), -(target_ang - span)
-        cv2.ellipse(wheel, center, (int(label_r), int(label_r)), 0, s2, e2, (255, 255, 255, 255), 3, cv2.LINE_AA)
+    _LABEL_ANGLES = {0: (135, 315), 90: (45, 225), 180: (315, 135), 270: (225, 45)}
+    ang20, ang35 = _LABEL_ANGLES[rot]
 
+    for label, target_ang, current_r in [("20", ang20, r20), ("35", ang35, r35)]:
+        # Draw arcs (dimension lines)
+        gap, span = 15.0, 31.5
+        for s_off, e_off in [(span, gap), (-gap, -span)]:
+            s, e = -(target_ang + s_off), -(target_ang + e_off)
+            cv2.ellipse(wheel, center, (int(current_r), int(current_r)), 0, s, e, (255, 255, 255, 255), 3, cv2.LINE_AA)
+
+        # Draw centered TVL frequency labels
         (tw, th), _ = cv2.getTextSize(label, font, font_scale, font_thick)
         rad = np.deg2rad(target_ang)
-        tx = int(center[0] + label_r * np.cos(rad) - tw / 2)
-        ty = int(center[1] - label_r * np.sin(rad) + th / 2)
-
+        tx = int(center[0] + current_r * np.cos(rad) - tw / 2)
+        ty = int(center[1] - current_r * np.sin(rad) + th / 2)
         cv2.putText(wheel, label, (tx, ty), font, font_scale, (255, 255, 255, 255), font_thick, cv2.LINE_AA)
 
     return wheel
@@ -346,20 +411,19 @@ def _draw_pillars(final, r, c):
 
 def _draw_corner_wheels(img, r, c):
     """
-    Draws the four resolution wheels at specified intersections.
-    Intersections chosen to center at approx (200, 180) for the top-left.
+    Draws the four resolution wheels with correct quadrant-specific rotations.
     """
-    # Top-Left: Wedges/Labels at 0°
+    # Top-Left (UL): 0° rotation
     _stamp_wheel(img, c[2], r[2], _WHEEL_PATCHES[0])
 
-    # Top-Right: Everything rotated 90° CW
-    _stamp_wheel(img, c[22], r[2], _WHEEL_PATCHES[90])
+    # Top-Right (UR): 90° rotation
+    _stamp_wheel(img, c[21], r[2], _WHEEL_PATCHES[90])
 
-    # Bottom-Right: Everything rotated 180° CW
-    _stamp_wheel(img, c[22], r[12], _WHEEL_PATCHES[180])
+    # Bottom-Right (LR): 180° rotation
+    _stamp_wheel(img, c[21], r[11], _WHEEL_PATCHES[180])
 
-    # Bottom-Left: Everything rotated 270° CW
-    _stamp_wheel(img, c[2], r[12], _WHEEL_PATCHES[270])
+    # Bottom-Left (LL): 270° rotation
+    _stamp_wheel(img, c[2], r[11], _WHEEL_PATCHES[270])
 
 
 def _draw_overscan_marks(final):
