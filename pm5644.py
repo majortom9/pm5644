@@ -40,159 +40,12 @@ BY_NEG = ( 31, 146, 127)   # 270° (−B−Y, −U)
 GY_POS = ( 48, 115, 180)   # 146° (+G−Y)
 GY_NEG = (206, 139,  74)   # 326° (−G−Y)
 
-def _draw_axis_aligned_tvl_wedge(img, center,
-                                 r_inner, r_outer,
-                                 axis_angle_deg,
-                                 wedge_span_deg,
-                                 tvl_min, tvl_max,
-                                 picture_height_px,
-                                 rot):
+from wheel import stamp_wheel
 
-    # Axis corrected for rotation
-    axis = axis_angle_deg - rot
-    half_span = wedge_span_deg / 2.0
 
-    ang_start = np.deg2rad(axis - half_span)
-    ang_end   = np.deg2rad(axis + half_span)
-
-    for r in range(r_inner, r_outer):
-
-        # Linear TVL ramp
-        t = (r - r_inner) / float(r_outer - r_inner)
-        tvl = tvl_min + t * (tvl_max - tvl_min)
-
-        px_per_line = picture_height_px / tvl
-
-        # arc length = r * angle
-        ang_per_line = px_per_line / r
-
-        a = ang_start
-        toggle = 0
-
-        while a < ang_end:
-            a2 = min(a + ang_per_line, ang_end)
-
-            if toggle:
-                cv2.ellipse(
-                    img,
-                    center,
-                    (r, r),
-                    0,
-                    np.rad2deg(a),
-                    np.rad2deg(a2),
-                    (255,255,255,255),
-                    1,
-                    cv2.LINE_AA
-                )
-
-            toggle ^= 1
-            a = a2
-
-def _generate_advanced_wheel(rot):
-    # ─── 1. CANVAS AND DIMENSIONS ───
-    # Circle diameter is derived from the global SQ (grid size)
-    circle_radius = (int(SQ * 2.8) - 4) // 2
-    padding = 12
-    canvas_size = (circle_radius + padding) * 2
-    radius = circle_radius
-
-    wheel = np.zeros((canvas_size, canvas_size, 4), dtype=np.uint8)
-    center = (canvas_size // 2, canvas_size // 2)
-
-    # ─── 2. HUB & GEOMETRY CONFIGURATION ───
-    border_thickness = 12
-    hub_innermost_r = 12
-    hub_inner_r = 20
-    hub_outer_r = 28 # Threshold marker for 300 TVL start
-    spoke_overlap = 1
-    axis_thickness = 2
-
-    # ─── 3. DRAW STRUCTURAL RINGS (Corner Geometry Gauges) ───
-    # Draw white outer border and black interior
-    cv2.circle(wheel, center, radius, (255, 255, 255, 255), -1, cv2.LINE_AA)
-    cv2.circle(wheel, center, radius - border_thickness, (0, 0, 0, 255), -1, cv2.LINE_AA)
-    # Draw concentric hub rings (used for linearity and focus checks)
-    cv2.circle(wheel, center, hub_innermost_r, (255, 255, 255, 255), 2, cv2.LINE_AA)
-    cv2.circle(wheel, center, hub_inner_r, (255, 255, 255, 255), 2, cv2.LINE_AA)
-    cv2.circle(wheel, center, hub_outer_r, (255, 255, 255, 255), 2, cv2.LINE_AA)
-
-    # ─── 4. 300 TVL DEFINITION LINES (Axis Graticules) ───
-    spoke_start_r = hub_outer_r
-    spoke_end_r = radius - (border_thickness - spoke_overlap)
-    total_space = spoke_end_r - spoke_start_r
-
-    # Segment ratios ensure labels align with the 300 TVL 'def' line markers
-    seg1_len = int(total_space * 0.35)
-    gap1_len = int(total_space * 0.12)
-    seg2_len = int(total_space * 0.25)
-    gap2_len = int(total_space * 0.12)
-    seg3_len = total_space - (seg1_len + gap1_len + seg2_len + gap2_len)
-
-    # --- AXIS GRATICULE DRAWING (Temporarily Disabled) ---
-    # for axis_angle in [0, 90]:
-    #     ... (loop code) ...
-
-    # ─── 5. FIXED-FREQUENCY RESOLUTION WEDGES ───
-    # Defined by PM5644 specs for corner definition
-    _WEDGE_CONFIG = {
-        0:   {"v_hi": 90,  "v_lo": 270, "h_hi": 0,   "h_lo": 180}, # UL
-        90:  {"v_hi": 90,  "v_lo": 270, "h_hi": 180, "h_lo": 0},   # UR
-        180: {"v_hi": 270, "v_lo": 90,  "h_hi": 180, "h_lo": 0},   # LR
-        270: {"v_hi": 270, "v_lo": 90,  "h_hi": 0,   "h_lo": 180}, # LL
-    }
-    cfg = _WEDGE_CONFIG[rot]
-
-    # Draw vertical (V) and horizontal (H) frequency packets
-    _draw_axis_aligned_tvl_wedge(wheel, center, spoke_start_r, spoke_end_r, axis_angle_deg=cfg["v_hi"], wedge_span_deg=30, tvl_min=400, tvl_max=400, picture_height_px=H, rot=0)
-    _draw_axis_aligned_tvl_wedge(wheel, center, spoke_start_r, spoke_end_r, axis_angle_deg=cfg["v_lo"], wedge_span_deg=30, tvl_min=250, tvl_max=250, picture_height_px=H, rot=0)
-    _draw_axis_aligned_tvl_wedge(wheel, center, spoke_start_r, spoke_end_r, axis_angle_deg=cfg["h_hi"], wedge_span_deg=30, tvl_min=300, tvl_max=300, picture_height_px=H, rot=0)
-    _draw_axis_aligned_tvl_wedge(wheel, center, spoke_start_r, spoke_end_r, axis_angle_deg=cfg["h_lo"], wedge_span_deg=30, tvl_min=150, tvl_max=150, picture_height_px=H, rot=0)
-
-    # ─── 6. DIMENSION ARCS AND TVL LABELS ───
-    font, font_scale, font_thick = cv2.FONT_HERSHEY_SIMPLEX, 0.53, 2
-
-    # Snap arc radii to the definition line boundaries
-    r20 = spoke_end_r - seg3_len  # Outer definition ring
-    r35 = spoke_start_r + seg1_len # Inner definition ring
-
-    _LABEL_ANGLES = {0: (135, 315), 90: (45, 225), 180: (315, 135), 270: (225, 45)}
-    ang20, ang35 = _LABEL_ANGLES[rot]
-
-    for label, target_ang, current_r in [("20", ang20, r20), ("35", ang35, r35)]:
-        # Draw arcs (dimension lines)
-        gap, span = 15.0, 31.5
-        for s_off, e_off in [(span, gap), (-gap, -span)]:
-            s, e = -(target_ang + s_off), -(target_ang + e_off)
-            cv2.ellipse(wheel, center, (int(current_r), int(current_r)), 0, s, e, (255, 255, 255, 255), 3, cv2.LINE_AA)
-
-        # Draw centered TVL frequency labels
-        (tw, th), _ = cv2.getTextSize(label, font, font_scale, font_thick)
-        rad = np.deg2rad(target_ang)
-        tx = int(center[0] + current_r * np.cos(rad) - tw / 2)
-        ty = int(center[1] - current_r * np.sin(rad) + th / 2)
-        cv2.putText(wheel, label, (tx, ty), font, font_scale, (255, 255, 255, 255), font_thick, cv2.LINE_AA)
-
-    return wheel
-
-# Pre-compute the four orientations
-_WHEEL_PATCHES = {r: _generate_advanced_wheel(r) for r in [0, 90, 180, 270]}
-
-def _stamp_wheel(img, cx, cy, patch):
-    """Blends the RGBA wheel patch onto the BGR image using alpha channel."""
-    R = patch.shape[0] // 2
-    x0, y0 = cx - R, cy - R
-    # Calculate bounds for clipping at image edges
-    ix0, iy0 = max(0, x0), max(0, y0)
-    ix1 = min(img.shape[1], x0 + patch.shape[1])
-    iy1 = min(img.shape[0], y0 + patch.shape[0])
-
-    # ROI and Alpha blending
-    roi = patch[iy0-y0:iy1-y0, ix0-x0:ix1-x0]
-    alpha = roi[:, :, 3:4] / 255.0
-    img[iy0:iy1, ix0:ix1] = img[iy0:iy1, ix0:ix1] * (1 - alpha) + roi[:, :, :3] * alpha
 
 # ── SINE-WAVE GENERATOR (multiburst bands) ───────────────────────────────────
-def get_sine_wave(w, h, mhz, band_w, ref_mhz=0.8, ref_cycles=5):
+def get_sine_wave(w, h, mhz, band_w, ref_mhz=0.8, ref_cycles=4):
     """
     Generate a vertical-stripe sinusoidal burst packet.
     Cycles are rounded to the nearest whole integer so the packet starts and
@@ -209,7 +62,10 @@ def get_sine_wave(w, h, mhz, band_w, ref_mhz=0.8, ref_cycles=5):
     x    = np.arange(w, dtype=np.float32)
     # Start from black (bottom of cycle) so each burst goes black→white→black
     wave = np.sin(2 * np.pi * cycles_per_px * x - np.pi / 2)
-    bar  = (127.5 * (1 + wave)).astype(np.uint8)
+    # blurry
+    # bar  = (127.5 * (1 + wave)).astype(np.uint8)
+    # Hard threshold — convert to pure black/white square wave: 
+    bar = np.where(wave >= 0, 255, 0).astype(np.uint8)
     return np.tile(bar, (h, 1))
 
 # ── TVL DIAGONAL PATCH GENERATOR ─────────────────────────────────────────────
@@ -296,15 +152,20 @@ def _draw_circle_content(r, c, center, radius, offset, standard="PAL"):
     mb_w   = mb_x_e - mb_x_s
     std = standard.upper()
     freq_map = {
-        "PAL":    [0.8, 1.8, 2.8, 3.8, 4.8],           # PAL-B/G
-        "PAL-BG": [0.8, 1.8, 2.8, 3.8, 4.8],
-        "PAL-I":  [1.5, 2.5, 3.5, 4.0, 4.5, 5.25],
-        "PAL-DK": [0.8, 1.8, 2.8, 3.8, 4.8, 5.63],
-        "NTSC":   [0.5, 1.0, 2.0, 3.0, 4.2],
-        "PAL-M":  [0.5, 1.0, 2.0, 3.0, 4.0],
-        "PAL-N":  [0.5, 1.0, 2.0, 3.0, 4.0],
-        "SECAM":  [0.5, 1.0, 2.0, 3.0, 4.0, 4.8],
+    # PAL variants: per Philips PM5544 manual, EBU recommended
+    'PAL':    [0.8, 1.8, 2.8, 3.8, 4.8],
+    'PAL-BG': [0.8, 1.8, 2.8, 3.8, 4.8],
+    'PAL-I':  [0.8, 1.8, 2.8, 3.8, 4.8],
+    'PAL-DK': [0.8, 1.8, 2.8, 3.8, 4.8],
+    # NTSC: conventional practice, not from Philips spec
+    'NTSC':   [0.5, 1.0, 2.0, 3.0, 3.58, 4.2],  # North America: 7.5 IRE pedestal
+    'NTSC-J': [0.5, 1.0, 2.0, 3.0, 3.58, 4.2],  # Japan: same freqs, 0 IRE black
+    'PAL-M':  [0.5, 1.0, 2.0, 3.0, 3.58, 4.2],  # Brazil,NTSC bandwidth, PAL colour
+    'PAL-N':  [0.5, 1.0, 2.0, 2.8, 3.58, 4.2],  # Argentina, Uraguay, Paraguay 
+    # SECAM: FM chroma makes multiburst non-standard; use luma-only bands
+    'SECAM':  [0.5, 1.0, 2.0, 3.0, 4.0, 4.5],
     }
+
     freqs  = freq_map.get(std, freq_map["PAL"])
     n_bands = len(freqs)
     band_w = mb_w // n_bands
@@ -312,7 +173,7 @@ def _draw_circle_content(r, c, center, radius, offset, standard="PAL"):
     ref_freq = freqs[0]   # lowest frequency = reference for cycle count
     for i, f in enumerate(freqs):
         bx = mb_x_s + i * band_w
-        sine = get_sine_wave(band_w, band_h, f, band_w, ref_mhz=ref_freq, ref_cycles=5)
+        sine = get_sine_wave(band_w, band_h, f, band_w, ref_mhz=ref_freq, ref_cycles=4)
         cl[r[7]:r[9], bx:bx + band_w] = cv2.cvtColor(sine, cv2.COLOR_GRAY2BGR)
 
     # Row 7: Tick marks & crosshair (drawn AFTER multiburst to overwrite shared row)
@@ -410,20 +271,11 @@ def _draw_pillars(final, r, c):
 
 
 def _draw_corner_wheels(img, r, c):
-    """
-    Draws the four resolution wheels with correct quadrant-specific rotations.
-    """
-    # Top-Left (UL): 0° rotation
-    _stamp_wheel(img, c[2], r[2], _WHEEL_PATCHES[0])
-
-    # Top-Right (UR): 90° rotation
-    _stamp_wheel(img, c[21], r[2], _WHEEL_PATCHES[90])
-
-    # Bottom-Right (LR): 180° rotation
-    _stamp_wheel(img, c[21], r[11], _WHEEL_PATCHES[180])
-
-    # Bottom-Left (LL): 270° rotation
-    _stamp_wheel(img, c[2], r[11], _WHEEL_PATCHES[270])
+    """Draws the four resolution wheels using the wheel module."""
+    stamp_wheel(img, c[2],  r[2],  'UL')
+    stamp_wheel(img, c[21], r[2],  'UR')
+    stamp_wheel(img, c[21], r[11], 'LR')
+    stamp_wheel(img, c[2],  r[11], 'LL')
 
 
 def _draw_overscan_marks(final):
@@ -492,9 +344,6 @@ def _draw_text_overlays(final, r, center, callsign, text):
 
 # ── MAIN GENERATOR ───────────────────────────────────────────────────────────
 def draw_pm5644(callsign="WARF TV", standard="PAL", text=None, bg_intensity=50):
-    # TODO: wire up `standard` to adjust multiburst frequencies and colour bar
-    # levels for PAL (4.43 MHz) vs NTSC (3.58 MHz) vs SECAM.
-
     offset = LINE_W // 2
     center = (W // 2, H // 2)
     radius = int(H * 0.442)
@@ -525,6 +374,12 @@ def draw_pm5644(callsign="WARF TV", standard="PAL", text=None, bg_intensity=50):
     _draw_phase_castellations(final, r, c, offset)
     _draw_text_overlays(final, r, center, callsign, text)
 
+    # 7.5 IRE black level pedestal — NTSC North America only
+    # NTSC-J (Japan) uses 0 IRE like PAL; plain NTSC assumes NA usage
+    # Lifts black from 0 to 19 digital levels (7.5/100 * 255 = 19.1)
+    if standard.upper() == 'NTSC':
+        final = np.clip(final.astype(np.int16) + 19, 19, 255).astype(np.uint8)
+
     return final
 
 
@@ -534,7 +389,7 @@ if __name__ == "__main__":
     parser.add_argument("callsign", nargs="?", default="WARF TV",
                         help="Station callsign (default: WARF TV)")
     parser.add_argument("--standard",
-                        choices=["PAL","PAL-BG","PAL-I","PAL-DK","PAL-M","PAL-N","NTSC","SECAM"],
+                        choices=["PAL","PAL-BG","PAL-I","PAL-DK","PAL-M","PAL-N","NTSC","NTSC-J","SECAM"],
                         default="PAL", help="Broadcast standard")
     parser.add_argument("--text",   default=None, help="Lower box text (default: today's date)")
     parser.add_argument("--bg", type=int, default=50, metavar="0-80",
@@ -557,9 +412,10 @@ if __name__ == "__main__":
     print("  [s]       : Save current image as PNG")
     print("  [q] / ESC : Quit")
 
+
     while True:
         # Pass args.standard here!
-        img = draw_pm5644(args.callsign, args.standard, args.text, 
+        img = draw_pm5644(args.callsign, args.standard, args.text,
                           bg_intensity=current_bg)
 
         if show_overlay:
