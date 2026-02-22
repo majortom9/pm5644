@@ -43,29 +43,28 @@ GY_NEG = (206, 139,  74)   # 326° (−G−Y)
 from wheel import stamp_wheel
 
 
-
 # ── SINE-WAVE GENERATOR (multiburst bands) ───────────────────────────────────
-def get_sine_wave(w, h, mhz, band_w, ref_mhz=0.8, ref_cycles=4):
+def get_sine_wave(w, h, mhz, band_w, ref_mhz, ref_cycles=4):
     """
     Generate a vertical-stripe sinusoidal burst packet.
     Cycles are rounded to the nearest whole integer so the packet starts and
     ends exactly at grey (zero crossing), giving a clean symmetrical waveform
     as seen on a waveform monitor.
+    Output range: 0 → 191 (75% white).
     """
     px_per_cycle  = band_w / ref_cycles
     cycles_per_px = mhz / (ref_mhz * px_per_cycle)
 
-    # Round to nearest whole number of cycles so both edges land on zero crossings
     n_cycles      = max(1, round(cycles_per_px * w))
     cycles_per_px = n_cycles / w
 
-    x    = np.arange(w, dtype=np.float32)
-    # Start from black (bottom of cycle) so each burst goes black→white→black
-    wave = np.sin(2 * np.pi * cycles_per_px * x - np.pi / 2)
-    # blurry
-    # bar  = (127.5 * (1 + wave)).astype(np.uint8)
-    # Hard threshold — convert to pure black/white square wave: 
-    bar = np.where(wave >= 0, 255, 0).astype(np.uint8)
+    x = np.arange(w, dtype=np.float32)
+    wave = np.sin(2 * np.pi * cycles_per_px * x - np.pi/2)
+
+    peak = 191.0                 # 75% white
+    bar  = np.round((peak / 2) * (1 + wave))
+    bar  = np.clip(bar, 0, peak).astype(np.uint8)
+
     return np.tile(bar, (h, 1))
 
 # ── TVL DIAGONAL PATCH GENERATOR ─────────────────────────────────────────────
