@@ -40,7 +40,7 @@ BY_NEG = ( 31, 146, 127)   # 270° (−B−Y, −U)
 GY_POS = ( 48, 115, 180)   # 146° (+G−Y)
 GY_NEG = (206, 139,  74)   # 326° (−G−Y)
 
-from wheel import stamp_wheel
+from pm5644_wheel import stamp_wheel
 
 
 # ── SINE-WAVE GENERATOR (multiburst bands) ───────────────────────────────────
