@@ -409,8 +409,14 @@ if __name__ == "__main__":
     print("  [+] / [-] : Adjust background intensity")
     print("  [o]       : Toggle BG% overlay")
     print("  [s]       : Save current image as PNG")
+    print("  [f]       : Toggle fullscreen")
     print("  [q] / ESC : Quit")
 
+
+    WIN = 'PM5644 Test Pattern'
+    cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WIN, W // 2, H // 2)   # start at 1/4 screen area (half width, half height)
+    is_fullscreen = False
 
     while True:
         # Pass args.standard here!
@@ -426,7 +432,7 @@ if __name__ == "__main__":
             cv2.putText(img, ov_text, (tx+1, ty+1), ov_font, 0.8, (0,0,0),     2)
             cv2.putText(img, ov_text, (tx,   ty),   ov_font, 0.8, (255,255,255), 2)
 
-        cv2.imshow('PM5644 Test Pattern', img)
+        cv2.imshow(WIN, img)
 
         key = cv2.waitKey(50) & 0xFF   # 50 ms — ~20 fps, far less CPU than waitKey(1)
         if   key in (ord('+'), ord('=')):  current_bg = min(80, current_bg + 1)
@@ -439,6 +445,11 @@ if __name__ == "__main__":
             filename = f"pm5644_{args.standard}_bg{current_bg}_{ts}.png"
             cv2.imwrite(filename, img)
             print(f"Saved: {filename}")
+        elif key == ord('f'):
+            is_fullscreen = not is_fullscreen
+            mode = cv2.WINDOW_FULLSCREEN if is_fullscreen else cv2.WINDOW_NORMAL
+            cv2.setWindowProperty(WIN, cv2.WND_PROP_FULLSCREEN, mode)
+            print(f"Fullscreen {'ON' if is_fullscreen else 'OFF'}")
         elif key in (ord('q'), 27):
             break
 
